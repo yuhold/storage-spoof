@@ -16,19 +16,13 @@ import com.yuholt.storagespoof.config.SpoofProfile;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.Map;
-import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 import io.github.libxposed.api.XposedModule;
 
 public final class StorageSpoofModule extends XposedModule {
     private static final String TAG = "StorageSpoof";
-    private static final Set<String> SUPPORTED_PACKAGES = Set.of(
-            "com.android.settings",
-            "com.miui.securitycenter"
-    );
     private static final long CACHE_TTL_MILLIS = 2_000L;
-    private static final String SECURITY_CENTER_PACKAGE = "com.miui.securitycenter";
     private static final String HYPER_OS_STORAGE_FRAGMENT =
             "com.miui.optimizecenter.storage.StorageFragment";
     private static final String HYPER_OS_DATA_MANAGER =
@@ -52,7 +46,7 @@ public final class StorageSpoofModule extends XposedModule {
     private volatile Field refProfBytesField;
     private volatile boolean fieldLookupAttempted;
     private volatile boolean hooksInstalled;
-    private volatile boolean hyperOsHost;
+    private volatile HostHookPolicy hostPolicy = HostHookPolicy.forPackage(null);
     private volatile ClassLoader hostClassLoader;
     private volatile Method hyperOsSummaryMethod;
     private volatile Object hyperOsStorageFragment;
@@ -66,12 +60,20 @@ public final class StorageSpoofModule extends XposedModule {
 
     @Override
     public void onPackageReady(@NonNull PackageReadyParam param) {
-        if (!SUPPORTED_PACKAGES.contains(param.getPackageName()) || !param.isFirstPackage()) {
+        String packageName = param.getPackageName();
+        if (!param.isFirstPackage() || !HostHookPolicy.isSupportedPackage(packageName)) {
             return;
         }
-        hyperOsHost = SECURITY_CENTER_PACKAGE.equals(param.getPackageName());
+
+        HostHookPolicy policy = HostHookPolicy.forPackage(packageName);
+        hostPolicy = policy;
         hostClassLoader = param.getClassLoader();
-        installHooks(hostClassLoader);
+        if (!policy.hasEnabledHooks()) {
+            log(Log.INFO, TAG, "Storage spoofing disabled in " + packageName
+                    + " to keep Security Center business logic unmodified");
+            return;
+        }
+        installHooks(hostClassLoader, policy);
     }
 
     @Override
@@ -100,22 +102,33 @@ public final class StorageSpoofModule extends XposedModule {
         storageSummaryTotal.remove();
         param.getOldHookHandles().forEach(HookHandle::unhook);
         hooksInstalled = false;
+        HostHookPolicy policy = hostPolicy;
+        if (!policy.hasEnabledHooks()) {
+            log(Log.WARN, TAG, "Storage hooks remain disabled after hot reload until "
+                    + "the target process restarts and reports its package identity");
+            return;
+        }
         installHooks(hostClassLoader != null
                 ? hostClassLoader
-                : StorageStatsManager.class.getClassLoader());
+                : StorageStatsManager.class.getClassLoader(), policy);
     }
 
-    private synchronized void installHooks(ClassLoader classLoader) {
-        if (hooksInstalled) {
+    private synchronized void installHooks(
+            ClassLoader classLoader,
+            HostHookPolicy policy) {
+        if (hooksInstalled || !policy.hasEnabledHooks()) {
             return;
         }
         try {
-            Class<?> managerClass = Class.forName(
-                    "android.app.usage.StorageStatsManager",
-                    false,
-                    classLoader);
-            int installedCount = installPackageStorageHooks(managerClass);
-            if (hyperOsHost) {
+            int installedCount = 0;
+            if (policy.packageStatsSpoofing()) {
+                Class<?> managerClass = Class.forName(
+                        "android.app.usage.StorageStatsManager",
+                        false,
+                        classLoader);
+                installedCount += installPackageStorageHooks(managerClass);
+            }
+            if (policy.hyperOsSummarySpoofing()) {
                 installedCount += installHyperOsStorageSummaryHooks(classLoader);
             }
             hooksInstalled = installedCount > 0;
