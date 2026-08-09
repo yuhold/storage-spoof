@@ -13,11 +13,21 @@ import androidx.annotation.NonNull;
 import com.yuholt.storagespoof.config.ProfileStore;
 import com.yuholt.storagespoof.config.SpoofProfile;
 
+import java.lang.reflect.Executable;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.IdentityHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
+import io.github.libxposed.api.XposedInterface;
 import io.github.libxposed.api.XposedModule;
 
 public final class StorageSpoofModule extends XposedModule {
@@ -46,6 +56,7 @@ public final class StorageSpoofModule extends XposedModule {
     private volatile Field refProfBytesField;
     private volatile boolean fieldLookupAttempted;
     private volatile boolean hooksInstalled;
+    private volatile String hostPackageName;
     private volatile HostHookPolicy hostPolicy = HostHookPolicy.forPackage(null);
     private volatile ClassLoader hostClassLoader;
     private volatile Method hyperOsSummaryMethod;
@@ -65,6 +76,7 @@ public final class StorageSpoofModule extends XposedModule {
             return;
         }
 
+        hostPackageName = packageName;
         HostHookPolicy policy = HostHookPolicy.forPackage(packageName);
         hostPolicy = policy;
         hostClassLoader = param.getClassLoader();
@@ -78,11 +90,31 @@ public final class StorageSpoofModule extends XposedModule {
 
     @Override
     public boolean onHotReloading(@NonNull HotReloadingParam param) {
+        String packageName = hostPackageName;
+        if (HostHookPolicy.isSupportedPackage(packageName)) {
+            param.setSavedInstanceState(packageName);
+            log(Log.INFO, TAG, "Saved hot-reload host identity: " + packageName);
+        } else {
+            log(Log.WARN, TAG, "No supported host identity available for hot reload");
+        }
         return true;
     }
 
     @Override
     public void onHotReloaded(@NonNull HotReloadedParam param) {
+        resetGenerationState();
+        HotReloadState state = HotReloadState.restore(param.getSavedInstanceState());
+        hostPackageName = state.packageName();
+        hostPolicy = HostHookPolicy.forPackage(hostPackageName);
+        ClassLoader loader = state.isEnabled()
+                ? (hostClassLoader != null
+                        ? hostClassLoader
+                        : StorageStatsManager.class.getClassLoader())
+                : null;
+        migrateHooks(param, hostPolicy, loader);
+    }
+
+    private void resetGenerationState() {
         preferences = getRemotePreferences(ProfileStore.PREFERENCES_NAME);
         profileCache.clear();
         originalSizes.clear();
@@ -100,17 +132,7 @@ public final class StorageSpoofModule extends XposedModule {
         hyperOsStorageFragment = null;
         storageSummaryDepth.remove();
         storageSummaryTotal.remove();
-        param.getOldHookHandles().forEach(HookHandle::unhook);
         hooksInstalled = false;
-        HostHookPolicy policy = hostPolicy;
-        if (!policy.hasEnabledHooks()) {
-            log(Log.WARN, TAG, "Storage hooks remain disabled after hot reload until "
-                    + "the target process restarts and reports its package identity");
-            return;
-        }
-        installHooks(hostClassLoader != null
-                ? hostClassLoader
-                : StorageStatsManager.class.getClassLoader(), policy);
     }
 
     private synchronized void installHooks(
@@ -138,37 +160,243 @@ public final class StorageSpoofModule extends XposedModule {
         }
     }
 
-    private int installPackageStorageHooks(Class<?> managerClass) throws IllegalAccessException {
+    private int installPackageStorageHooks(Class<?> managerClass) {
         int installedCount = 0;
-        for (Method method : managerClass.getDeclaredMethods()) {
-            if (!"queryStatsForPackage".equals(method.getName())
-                    || !StorageStats.class.isAssignableFrom(method.getReturnType())) {
-                continue;
-            }
-            method.setAccessible(true);
-            int packageNameIndex = findPackageNameIndex(method);
-            int userIndex = findUserHandleIndex(method);
-            String hookId = "storage-spoof-package-" + installedCount;
-            hook(method)
-                    .setId(hookId)
-                    .setExceptionMode(ExceptionMode.PROTECTIVE)
-                    .intercept(chain -> {
-                        Object result = chain.proceed();
-                        if (result instanceof StorageStats stats) {
-                            Object[] args = chain.getArgs().toArray();
-                            applyProfile(
-                                    findPackageName(args, packageNameIndex),
-                                    findUserHandle(args, userIndex),
-                                    stats);
-                        }
-                        return result;
-                    });
-            log(Log.INFO, TAG, "Hooked " + method + " as " + hookId
-                    + ", package argument=" + packageNameIndex
-                    + ", user argument=" + userIndex);
+        for (Method method : collectPackageStorageMethods(managerClass)) {
+            installPackageStorageHook(method);
             installedCount++;
         }
         return installedCount;
+    }
+
+    private XposedInterface.HookHandle installPackageStorageHook(Method method) {
+        String key = executableKey(method);
+        String hookId = packageHookId(key);
+        XposedInterface.HookHandle handle = hook(method)
+                .setId(hookId)
+                .setExceptionMode(ExceptionMode.PROTECTIVE)
+                .intercept(createPackageStorageHooker(method));
+        log(Log.INFO, TAG, "Hooked " + key + " as " + hookId
+                + ", package argument=" + findPackageNameIndex(method)
+                + ", user argument=" + findUserHandleIndex(method));
+        return handle;
+    }
+
+    private XposedInterface.Hooker createPackageStorageHooker(Method method) {
+        int packageNameIndex = findPackageNameIndex(method);
+        int userIndex = findUserHandleIndex(method);
+        return chain -> {
+            Object result = chain.proceed();
+            if (result instanceof StorageStats stats) {
+                Object[] args = chain.getArgs().toArray();
+                applyProfile(
+                        findPackageName(args, packageNameIndex),
+                        findUserHandle(args, userIndex),
+                        stats);
+            }
+            return result;
+        };
+    }
+
+    private static List<Method> collectPackageStorageMethods(Class<?> managerClass) {
+        List<Method> methods = new ArrayList<>();
+        for (Method method : managerClass.getDeclaredMethods()) {
+            if ("queryStatsForPackage".equals(method.getName())
+                    && StorageStats.class.isAssignableFrom(method.getReturnType())) {
+                method.setAccessible(true);
+                methods.add(method);
+            }
+        }
+        methods.sort(Comparator.comparing(StorageSpoofModule::executableKey));
+        return methods;
+    }
+
+    private static String executableKey(Executable executable) {
+        StringBuilder key = new StringBuilder(executable.getDeclaringClass().getName())
+                .append('#').append(executable.getName()).append('(');
+        Class<?>[] parameterTypes = executable.getParameterTypes();
+        for (int i = 0; i < parameterTypes.length; i++) {
+            if (i > 0) {
+                key.append(',');
+            }
+            key.append(parameterTypes[i].getName());
+        }
+        return key.append(')').append("->").append(
+                executable instanceof Method method
+                        ? method.getReturnType().getName()
+                        : "<init>").toString();
+    }
+
+    private static String packageHookId(String executableKey) {
+        try {
+            byte[] digest = MessageDigest.getInstance("SHA-256")
+                    .digest(executableKey.getBytes(StandardCharsets.UTF_8));
+            StringBuilder id = new StringBuilder("storage-spoof-package-");
+            for (int index = 0; index < 12; index++) {
+                id.append(String.format("%02x", digest[index]));
+            }
+            return id.toString();
+        } catch (NoSuchAlgorithmException impossible) {
+            throw new AssertionError("SHA-256 unavailable", impossible);
+        }
+    }
+
+    private void migrateHooks(
+            HotReloadedParam param,
+            HostHookPolicy policy,
+            ClassLoader classLoader) {
+        List<HookMigrationPlan.ExistingHook> existingHooks = new ArrayList<>();
+        Map<HookMigrationPlan.ExistingHook, XposedInterface.HookHandle> handlesByDescriptor =
+                new IdentityHashMap<>();
+        List<XposedInterface.HookHandle> malformedOwnedHandles = new ArrayList<>();
+        for (XposedInterface.HookHandle handle : param.getOldHookHandles()) {
+            String id;
+            try {
+                id = handle.getId();
+            } catch (Throwable throwable) {
+                log(Log.ERROR, TAG, "Failed to inspect old hook ID; leaving unknown handle alone",
+                        throwable);
+                continue;
+            }
+            if (!isModuleOwnedHookId(id)) {
+                continue;
+            }
+            try {
+                Executable executable = handle.getExecutable();
+                if (executable == null) {
+                    malformedOwnedHandles.add(handle);
+                    log(Log.ERROR, TAG, "Module-owned old hook has no executable: " + id);
+                    continue;
+                }
+                HookMigrationPlan.ExistingHook descriptor = HookMigrationPlan.existing(
+                        id, executableKey(executable));
+                existingHooks.add(descriptor);
+                handlesByDescriptor.put(descriptor, handle);
+            } catch (Throwable throwable) {
+                malformedOwnedHandles.add(handle);
+                log(Log.ERROR, TAG, "Failed to inspect module-owned old hook: " + id, throwable);
+            }
+        }
+
+        for (XposedInterface.HookHandle handle : malformedOwnedHandles) {
+            unhookOldHandle(handle, "malformed module-owned hook");
+        }
+
+        if (!policy.hasEnabledHooks() || hostPackageName == null) {
+            for (HookMigrationPlan.ExistingHook existing : existingHooks) {
+                unhookOldHandle(handlesByDescriptor.get(existing), existing.id());
+            }
+            hooksInstalled = false;
+            log(Log.WARN, TAG, "Storage hooks disabled after hot reload for host identity: "
+                    + hostPackageName);
+            return;
+        }
+
+        List<DesiredPackageHook> desiredHooks;
+        try {
+            Class<?> managerClass = Class.forName(
+                    "android.app.usage.StorageStatsManager", false, classLoader);
+            desiredHooks = collectPackageStorageMethods(managerClass).stream()
+                    .map(method -> new DesiredPackageHook(
+                            HookMigrationPlan.desired(executableKey(method)), method))
+                    .toList();
+        } catch (Throwable throwable) {
+            for (HookMigrationPlan.ExistingHook existing : existingHooks) {
+                unhookOldHandle(handlesByDescriptor.get(existing), existing.id());
+            }
+            hooksInstalled = false;
+            log(Log.ERROR, TAG, "Failed to resolve desired storage hooks; disabled", throwable);
+            return;
+        }
+
+        Map<String, Method> methodsByKey = new HashMap<>();
+        List<HookMigrationPlan.DesiredHook> desiredDescriptors = new ArrayList<>();
+        for (DesiredPackageHook desired : desiredHooks) {
+            desiredDescriptors.add(desired.descriptor());
+            methodsByKey.put(desired.descriptor().executableKey(), desired.method());
+        }
+
+        int activeDesiredHooks = 0;
+        List<HookMigrationPlan.Action> actions = HookMigrationPlan.plan(
+                hostPackageName, desiredDescriptors, existingHooks);
+        for (HookMigrationPlan.Action action : actions) {
+            try {
+                switch (action.kind()) {
+                    case REPLACE -> {
+                        Method method = methodsByKey.get(action.desired().executableKey());
+                        XposedInterface.HookHandle oldHandle = handlesByDescriptor.get(
+                                action.existing());
+                        try {
+                            oldHandle.replaceHook(createPackageStorageHooker(method));
+                            activeDesiredHooks++;
+                            log(Log.INFO, TAG, "Replaced hot-reload hook for "
+                                    + action.desired().executableKey());
+                        } catch (Throwable replacementFailure) {
+                            log(Log.ERROR, TAG, "Failed to replace hot-reload hook for "
+                                    + action.desired().executableKey(), replacementFailure);
+                            if (unhookOldHandle(oldHandle, action.existing().id())
+                                    && installPackageStorageHookSafely(method)) {
+                                activeDesiredHooks++;
+                            }
+                        }
+                    }
+                    case INSTALL -> {
+                        Method method = methodsByKey.get(action.desired().executableKey());
+                        if (installPackageStorageHookSafely(method)) {
+                            activeDesiredHooks++;
+                        }
+                    }
+                    case UNHOOK -> unhookOldHandle(
+                            handlesByDescriptor.get(action.existing()), action.existing().id());
+                    case DISABLE -> {
+                        // The disabled policy is handled before desired hooks are resolved.
+                    }
+                }
+            } catch (Throwable throwable) {
+                log(Log.ERROR, TAG, "Failed hot-reload migration action " + action.kind(),
+                        throwable);
+            }
+        }
+        hooksInstalled = activeDesiredHooks > 0;
+        log(Log.INFO, TAG, "Hot reload activated " + activeDesiredHooks
+                + " package storage hook(s)");
+    }
+
+    private boolean installPackageStorageHookSafely(Method method) {
+        if (!hostPolicy.packageStatsSpoofing()
+                || !"com.android.settings".equals(hostPackageName)
+                || method == null) {
+            return false;
+        }
+        try {
+            installPackageStorageHook(method);
+            return true;
+        } catch (Throwable throwable) {
+            log(Log.ERROR, TAG, "Failed to install hot-reload hook for "
+                    + (method == null ? "<unknown>" : executableKey(method)), throwable);
+            return false;
+        }
+    }
+
+    private boolean unhookOldHandle(XposedInterface.HookHandle handle, String description) {
+        if (handle == null) {
+            log(Log.ERROR, TAG, "Missing old hook handle for " + description);
+            return false;
+        }
+        try {
+            handle.unhook();
+            log(Log.INFO, TAG, "Unhooked old module hook: " + description);
+            return true;
+        } catch (Throwable throwable) {
+            log(Log.ERROR, TAG, "Failed to unhook old module hook: " + description, throwable);
+            return false;
+        }
+    }
+
+    private static boolean isModuleOwnedHookId(String id) {
+        return id != null && (id.startsWith("storage-spoof-package-")
+                || "storage-spoof-hyperos-summary".equals(id)
+                || "storage-spoof-hyperos-available".equals(id));
     }
 
     private int installHyperOsStorageSummaryHooks(ClassLoader classLoader) {
@@ -523,6 +751,11 @@ public final class StorageSpoofModule extends XposedModule {
             return packageName;
         }
         return null;
+    }
+
+    private record DesiredPackageHook(
+            HookMigrationPlan.DesiredHook descriptor,
+            Method method) {
     }
 
     private record CacheEntry(SpoofProfile profile, long loadedAtMillis) {
