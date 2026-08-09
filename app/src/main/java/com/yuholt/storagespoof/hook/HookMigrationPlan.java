@@ -94,7 +94,7 @@ public final class HookMigrationPlan {
         return executableKnown || (id != null && (id.startsWith("storage-spoof-package-")
                 || "storage-spoof-hyperos-summary".equals(id)
                 || "storage-spoof-hyperos-available".equals(id)))
-                || (!idReadable && id == null && !executableKnown);
+                || (!executableKnown && id == null);
     }
 
     public static DesiredHook desired(String executableKey) {
