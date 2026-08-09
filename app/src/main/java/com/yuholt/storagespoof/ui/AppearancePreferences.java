@@ -10,11 +10,18 @@ public final class AppearancePreferences {
     public static final String UI_MATERIAL3 = "material3";
     public static final String COLOR_MONET = "monet";
     public static final String COLOR_CUSTOM = "custom";
+    public static final String THEME_SYSTEM = "system";
+    public static final String THEME_LIGHT = "light";
+    public static final String THEME_DARK = "dark";
 
     private static final String PREFERENCES_NAME = "appearance";
     private static final String KEY_UI_MODE = "ui_mode";
     private static final String KEY_COLOR_MODE = "color_mode";
+    private static final String KEY_THEME_MODE = "theme_mode";
     private static final String KEY_SEED_COLOR = "seed_color";
+    private static final String KEY_BACKGROUND_URI = "background_uri";
+    private static final String KEY_BACKGROUND_BRIGHTNESS = "background_brightness";
+    private static final int DEFAULT_BACKGROUND_BRIGHTNESS = 45;
     private static final int DEFAULT_SEED_COLOR = 0xFF6750A4;
 
     private final SharedPreferences preferences;
@@ -39,6 +46,14 @@ public final class AppearancePreferences {
         preferences.edit().putString(KEY_COLOR_MODE, mode).apply();
     }
 
+    public String getThemeMode() {
+        return preferences.getString(KEY_THEME_MODE, THEME_SYSTEM);
+    }
+
+    public void setThemeMode(String mode) {
+        preferences.edit().putString(KEY_THEME_MODE, mode).apply();
+    }
+
     @ColorInt
     public int getSeedColor() {
         return preferences.getInt(KEY_SEED_COLOR, DEFAULT_SEED_COLOR);
@@ -46,6 +61,26 @@ public final class AppearancePreferences {
 
     public void setSeedColor(@ColorInt int color) {
         preferences.edit().putInt(KEY_SEED_COLOR, color | 0xFF000000).apply();
+    }
+
+    public String getBackgroundUri() {
+        return preferences.getString(KEY_BACKGROUND_URI, "");
+    }
+
+    public void setBackgroundUri(String uri) {
+        preferences.edit().putString(KEY_BACKGROUND_URI, uri == null ? "" : uri).apply();
+    }
+
+    public int getBackgroundBrightness() {
+        return preferences.getInt(
+                KEY_BACKGROUND_BRIGHTNESS,
+                DEFAULT_BACKGROUND_BRIGHTNESS);
+    }
+
+    public void setBackgroundBrightness(int brightness) {
+        preferences.edit().putInt(
+                KEY_BACKGROUND_BRIGHTNESS,
+                Math.max(0, Math.min(100, brightness))).apply();
     }
 
     public static String formatColor(@ColorInt int color) {

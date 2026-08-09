@@ -4,6 +4,9 @@ import android.app.Application;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.appcompat.app.AppCompatDelegate;
+
+import com.yuholt.storagespoof.ui.AppearancePreferences;
 
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArraySet;
@@ -18,8 +21,18 @@ public final class StorageSpoofApplication extends Application
 
     @Override
     public void onCreate() {
+        applyThemeMode(new AppearancePreferences(this).getThemeMode());
         super.onCreate();
         XposedServiceHelper.registerListener(this);
+    }
+
+    public static void applyThemeMode(String mode) {
+        int nightMode = switch (mode) {
+            case AppearancePreferences.THEME_LIGHT -> AppCompatDelegate.MODE_NIGHT_NO;
+            case AppearancePreferences.THEME_DARK -> AppCompatDelegate.MODE_NIGHT_YES;
+            default -> AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM;
+        };
+        AppCompatDelegate.setDefaultNightMode(nightMode);
     }
 
     @Nullable

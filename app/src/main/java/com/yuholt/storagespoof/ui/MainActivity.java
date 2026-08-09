@@ -2,11 +2,15 @@ package com.yuholt.storagespoof.ui;
 
 import android.app.usage.StorageStats;
 import android.app.usage.StorageStatsManager;
+import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
+import android.graphics.ImageDecoder;
+import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
+import android.net.Uri;
 import android.os.Bundle;
 import android.os.Environment;
 import android.os.StatFs;
@@ -16,7 +20,10 @@ import android.text.TextWatcher;
 import android.view.Menu;
 import android.view.MenuItem;
 import android.view.View;
+import android.widget.ArrayAdapter;
+import android.widget.AutoCompleteTextView;
 import android.widget.EditText;
+import android.widget.ImageView;
 import android.widget.RadioButton;
 import android.widget.RadioGroup;
 import android.widget.TextView;
@@ -24,16 +31,24 @@ import android.widget.Toast;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.activity.result.ActivityResultLauncher;
+import androidx.activity.result.PickVisualMediaRequest;
+import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
 import com.google.android.material.appbar.MaterialToolbar;
+import com.google.android.material.button.MaterialButton;
 import com.google.android.material.button.MaterialButtonToggleGroup;
+import com.google.android.material.chip.ChipGroup;
 import com.google.android.material.color.DynamicColors;
 import com.google.android.material.color.DynamicColorsOptions;
+import com.google.android.material.bottomnavigation.BottomNavigationView;
+import com.google.android.material.bottomsheet.BottomSheetDialog;
 import com.google.android.material.materialswitch.MaterialSwitch;
+import com.google.android.material.textfield.TextInputLayout;
 import com.google.android.material.slider.Slider;
 import com.yuholt.storagespoof.R;
 import com.yuholt.storagespoof.StorageSpoofApplication;
@@ -42,7 +57,6 @@ import com.yuholt.storagespoof.config.SpoofProfile;
 
 import java.lang.reflect.Method;
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -54,43 +68,65 @@ public final class MainActivity extends AppCompatActivity
     private static final int MENU_APPEARANCE = 1;
     private static final int MENU_ABOUT = 2;
     private static final int MENU_READINESS = 3;
+    private static final String LIST_PREFERENCES_NAME = "app_list";
+    private static final String KEY_SHOW_SYSTEM_APPS = "show_system_apps";
+    private static final String KEY_FILTER_MODE = "filter_mode";
+    private static final String KEY_SORT_MODE = "sort_mode";
     private static final long DEFAULT_APP_BYTES = 128L << 20;
     private static final long DEFAULT_DATA_BYTES = 64L << 20;
     private static final long DEFAULT_CACHE_BYTES = 16L << 20;
 
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
 
+    private final ActivityResultLauncher<PickVisualMediaRequest> backgroundPicker =
+            registerForActivityResult(
+                    new ActivityResultContracts.PickVisualMedia(),
+                    this::onBackgroundSelected);
+
     private AppearancePreferences appearancePreferences;
+    private SharedPreferences listPreferences;
     private AppAdapter adapter;
     private TextView emptyText;
     private TextView moduleStatus;
+    private TextView listSummary;
     private SharedPreferences remotePreferences;
+    private AlertDialog appearanceDialog;
+    private TextView appearanceBackgroundStatus;
+    private TextView appearanceBackgroundBrightnessValue;
+    private Uri pendingBackgroundUri;
+    private int pendingBackgroundBrightness;
+    private boolean removeBackground;
 
     @Override
     protected void onCreate(@Nullable Bundle savedInstanceState) {
         appearancePreferences = new AppearancePreferences(this);
+        listPreferences = getSharedPreferences(LIST_PREFERENCES_NAME, MODE_PRIVATE);
         applyColors();
         super.onCreate(savedInstanceState);
 
         boolean customUi = AppearancePreferences.UI_CUSTOM.equals(appearancePreferences.getUiMode());
         setContentView(customUi ? R.layout.activity_main_custom : R.layout.activity_main);
+        applyBackgroundImage();
 
         MaterialToolbar toolbar = findViewById(R.id.toolbar);
         setSupportActionBar(toolbar);
+        configureNavigation(toolbar);
 
         moduleStatus = findViewById(R.id.module_status);
+        listSummary = findViewById(R.id.list_summary);
         emptyText = findViewById(R.id.empty_text);
         RecyclerView appList = findViewById(R.id.app_list);
         adapter = new AppAdapter(this, customUi, this::showProfileDialog);
         appList.setLayoutManager(new LinearLayoutManager(this));
         appList.setAdapter(adapter);
+        configureListControls(customUi);
 
         EditText search = findViewById(R.id.search);
         search.addTextChangedListener(new SimpleTextWatcher() {
             @Override
             public void afterTextChanged(Editable editable) {
                 adapter.filter(editable.toString());
-                updateEmptyState();
+                updateListState();
             }
         });
 
@@ -115,19 +151,47 @@ public final class MainActivity extends AppCompatActivity
         super.onDestroy();
     }
 
+    private void configureNavigation(MaterialToolbar toolbar) {
+        View homePage = findViewById(R.id.page_home);
+        View appsPage = findViewById(R.id.page_apps);
+        View settingsPage = findViewById(R.id.page_settings);
+        BottomNavigationView navigation = findViewById(R.id.bottom_navigation);
+        navigation.setOnItemSelectedListener(item -> {
+            int selectedId = item.getItemId();
+            boolean home = selectedId == R.id.navigation_home;
+            boolean apps = selectedId == R.id.navigation_apps;
+            homePage.setVisibility(home ? View.VISIBLE : View.GONE);
+            appsPage.setVisibility(apps ? View.VISIBLE : View.GONE);
+            settingsPage.setVisibility(
+                    selectedId == R.id.navigation_settings
+                            ? View.VISIBLE
+                            : View.GONE);
+            toolbar.setTitle(home
+                    ? R.string.navigation_home
+                    : apps
+                            ? R.string.navigation_apps
+                            : R.string.navigation_settings);
+            return true;
+        });
+        findViewById(R.id.home_open_apps).setOnClickListener(button ->
+                navigation.setSelectedItemId(R.id.navigation_apps));
+        findViewById(R.id.home_readiness).setOnClickListener(button ->
+                startActivity(new Intent(this, LauncherActivity.class)
+                        .putExtra(LauncherActivity.EXTRA_FORCE_SHOW, true)));
+        findViewById(R.id.home_about).setOnClickListener(button ->
+                startActivity(new Intent(this, AboutActivity.class)));
+        findViewById(R.id.settings_appearance).setOnClickListener(button ->
+                showAppearanceDialog());
+        findViewById(R.id.settings_readiness).setOnClickListener(button ->
+                startActivity(new Intent(this, LauncherActivity.class)
+                        .putExtra(LauncherActivity.EXTRA_FORCE_SHOW, true)));
+        findViewById(R.id.settings_about).setOnClickListener(button ->
+                startActivity(new Intent(this, AboutActivity.class)));
+        navigation.setSelectedItemId(R.id.navigation_home);
+    }
+
     @Override
     public boolean onCreateOptionsMenu(Menu menu) {
-        MenuItem appearance = menu.add(
-                Menu.NONE,
-                MENU_APPEARANCE,
-                Menu.NONE,
-                R.string.appearance);
-        appearance.setShowAsAction(MenuItem.SHOW_AS_ACTION_IF_ROOM);
-        appearance.setIcon(android.R.drawable.ic_menu_manage);
-        menu.add(Menu.NONE, MENU_READINESS, Menu.NONE, R.string.menu_readiness)
-                .setShowAsAction(MenuItem.SHOW_AS_ACTION_NEVER);
-        menu.add(Menu.NONE, MENU_ABOUT, Menu.NONE, R.string.menu_about)
-                .setShowAsAction(MenuItem.SHOW_AS_ACTION_NEVER);
         return true;
     }
 
@@ -155,11 +219,13 @@ public final class MainActivity extends AppCompatActivity
             if (service == null) {
                 remotePreferences = null;
                 adapter.setPreferences(null);
+                updateListState();
                 moduleStatus.setText(R.string.module_status_unavailable);
                 return;
             }
             remotePreferences = service.getRemotePreferences(ProfileStore.PREFERENCES_NAME);
             adapter.setPreferences(remotePreferences);
+            updateListState();
             moduleStatus.setText(getString(
                     R.string.module_status_ready,
                     service.getFrameworkName(),
@@ -192,21 +258,219 @@ public final class MainActivity extends AppCompatActivity
                 apps.add(new AppEntry(
                         label == null ? info.packageName : label.toString(),
                         info.packageName,
-                        packageManager.getApplicationIcon(info)));
+                        packageManager.getApplicationIcon(info),
+                        (info.flags & (ApplicationInfo.FLAG_SYSTEM
+                                | ApplicationInfo.FLAG_UPDATED_SYSTEM_APP)) != 0));
             }
-            apps.sort(Comparator
-                    .comparing(AppEntry::label, String.CASE_INSENSITIVE_ORDER)
-                    .thenComparing(AppEntry::packageName));
             runOnUiThread(() -> {
                 adapter.setApps(apps);
-                updateEmptyState();
+                updateListState();
             });
         });
     }
 
-    private void updateEmptyState() {
+    private void configureListControls(boolean customUi) {
+        boolean showSystemApps = listPreferences.getBoolean(KEY_SHOW_SYSTEM_APPS, false);
+        String filterMode = listPreferences.getString(
+                KEY_FILTER_MODE,
+                AppListPolicy.FILTER_ALL);
+        String sortMode = listPreferences.getString(
+                KEY_SORT_MODE,
+                AppListPolicy.SORT_DEFAULT);
+
+        MaterialSwitch showSystem = findViewById(R.id.show_system_apps);
+        showSystem.setChecked(showSystemApps);
+        adapter.setShowSystemApps(showSystemApps);
+        showSystem.setOnCheckedChangeListener((button, checked) -> {
+            listPreferences.edit().putBoolean(KEY_SHOW_SYSTEM_APPS, checked).apply();
+            adapter.setShowSystemApps(checked);
+            updateListState();
+        });
+
+        ChipGroup filterGroup = findViewById(R.id.filter_group);
+        filterGroup.check(switch (filterMode) {
+            case AppListPolicy.FILTER_CONFIGURED -> R.id.filter_configured;
+            case AppListPolicy.FILTER_UNCONFIGURED -> R.id.filter_unconfigured;
+            default -> R.id.filter_all;
+        });
+        adapter.setFilterMode(filterMode);
+        filterGroup.setOnCheckedStateChangeListener((group, checkedIds) -> {
+            int checkedId = checkedIds.isEmpty() ? R.id.filter_all : checkedIds.get(0);
+            String selected = checkedId == R.id.filter_configured
+                    ? AppListPolicy.FILTER_CONFIGURED
+                    : checkedId == R.id.filter_unconfigured
+                            ? AppListPolicy.FILTER_UNCONFIGURED
+                            : AppListPolicy.FILTER_ALL;
+            listPreferences.edit().putString(KEY_FILTER_MODE, selected).apply();
+            adapter.setFilterMode(selected);
+            updateListState();
+        });
+
+        String[] sortLabels = {
+                getString(R.string.sort_default),
+                getString(R.string.sort_name)
+        };
+        AutoCompleteTextView sort = findViewById(R.id.sort_mode);
+        sort.setAdapter(new ArrayAdapter<>(
+                this,
+                android.R.layout.simple_list_item_1,
+                sortLabels));
+        sort.setText(
+                AppListPolicy.SORT_NAME.equals(sortMode) ? sortLabels[1] : sortLabels[0],
+                false);
+        adapter.setSortMode(sortMode);
+        sort.setOnItemClickListener((parent, view, position, id) -> {
+            String selected = position == 1
+                    ? AppListPolicy.SORT_NAME
+                    : AppListPolicy.SORT_DEFAULT;
+            listPreferences.edit().putString(KEY_SORT_MODE, selected).apply();
+            adapter.setSortMode(selected);
+            updateVisibleSortChoice(selected);
+            updateListState();
+        });
+        configureVisibleSortControls(sortMode, sort, sortLabels);
+        configureListOptions(customUi, showSystemApps, filterMode, sortMode, sortLabels);
+    }
+
+    private void configureVisibleSortControls(
+            String sortMode,
+            AutoCompleteTextView hiddenSort,
+            String[] sortLabels) {
+        ChipGroup group = findViewById(R.id.custom_sort_group);
+        updateVisibleSortChoice(sortMode);
+        group.setOnCheckedStateChangeListener((chipGroup, checkedIds) -> {
+            int checkedId = checkedIds.isEmpty()
+                    ? R.id.custom_sort_default
+                    : checkedIds.get(0);
+            String selected = checkedId == R.id.custom_sort_name
+                    ? AppListPolicy.SORT_NAME
+                    : AppListPolicy.SORT_DEFAULT;
+            listPreferences.edit().putString(KEY_SORT_MODE, selected).apply();
+            hiddenSort.setText(
+                    AppListPolicy.SORT_NAME.equals(selected)
+                            ? sortLabels[1]
+                            : sortLabels[0],
+                    false);
+            adapter.setSortMode(selected);
+            updateListState();
+        });
+    }
+
+    private void updateVisibleSortChoice(String sortMode) {
+        ChipGroup group = findViewById(R.id.custom_sort_group);
+        if (group != null) {
+            group.check(AppListPolicy.SORT_NAME.equals(sortMode)
+                    ? R.id.custom_sort_name
+                    : R.id.custom_sort_default);
+        }
+    }
+
+    private void configureListOptions(
+            boolean customUi,
+            boolean showSystemApps,
+            String filterMode,
+            String sortMode,
+            String[] sortLabels) {
+        View optionsTrigger;
+        if (customUi) {
+            optionsTrigger = findViewById(R.id.custom_list_options);
+        } else {
+            TextInputLayout searchContainer = findViewById(R.id.search_container);
+            searchContainer.setEndIconOnClickListener(button -> showListOptions(
+                    showSystemApps,
+                    filterMode,
+                    sortMode,
+                    sortLabels));
+            return;
+        }
+        optionsTrigger.setOnClickListener(button -> showListOptions(
+                showSystemApps,
+                filterMode,
+                sortMode,
+                sortLabels));
+    }
+
+    private void showListOptions(
+            boolean showSystemApps,
+            String filterMode,
+            String sortMode,
+            String[] sortLabels) {
+        View view = getLayoutInflater().inflate(
+                R.layout.bottom_sheet_list_options,
+                findViewById(android.R.id.content),
+                false);
+        ChipGroup filter = view.findViewById(R.id.sheet_filter_group);
+        MaterialSwitch showSystem = view.findViewById(R.id.sheet_show_system_apps);
+        AutoCompleteTextView sort = view.findViewById(R.id.sheet_sort_mode);
+        String currentFilter = listPreferences.getString(
+                KEY_FILTER_MODE,
+                filterMode);
+        String currentSort = listPreferences.getString(
+                KEY_SORT_MODE,
+                sortMode);
+        filter.check(switch (currentFilter) {
+            case AppListPolicy.FILTER_CONFIGURED -> R.id.sheet_filter_configured;
+            case AppListPolicy.FILTER_UNCONFIGURED -> R.id.sheet_filter_unconfigured;
+            default -> R.id.sheet_filter_all;
+        });
+        showSystem.setChecked(listPreferences.getBoolean(
+                KEY_SHOW_SYSTEM_APPS,
+                showSystemApps));
+        sort.setAdapter(new ArrayAdapter<>(
+                this,
+                android.R.layout.simple_list_item_1,
+                sortLabels));
+        sort.setText(
+                AppListPolicy.SORT_NAME.equals(currentSort)
+                        ? sortLabels[1]
+                        : sortLabels[0],
+                false);
+
+        BottomSheetDialog dialog = new BottomSheetDialog(this);
+        dialog.setContentView(view);
+        filter.setOnCheckedStateChangeListener((group, checkedIds) -> {
+            int checkedId = checkedIds.isEmpty()
+                    ? R.id.sheet_filter_all
+                    : checkedIds.get(0);
+            String selected = checkedId == R.id.sheet_filter_configured
+                    ? AppListPolicy.FILTER_CONFIGURED
+                    : checkedId == R.id.sheet_filter_unconfigured
+                            ? AppListPolicy.FILTER_UNCONFIGURED
+                            : AppListPolicy.FILTER_ALL;
+            listPreferences.edit().putString(KEY_FILTER_MODE, selected).apply();
+            ChipGroup inlineFilter = findViewById(R.id.filter_group);
+            inlineFilter.check(switch (selected) {
+                case AppListPolicy.FILTER_CONFIGURED -> R.id.filter_configured;
+                case AppListPolicy.FILTER_UNCONFIGURED -> R.id.filter_unconfigured;
+                default -> R.id.filter_all;
+            });
+        });
+        showSystem.setOnCheckedChangeListener((buttonView, checked) -> {
+            listPreferences.edit().putBoolean(KEY_SHOW_SYSTEM_APPS, checked).apply();
+            ((MaterialSwitch) findViewById(R.id.show_system_apps)).setChecked(checked);
+        });
+        sort.setOnItemClickListener((parent, item, position, id) -> {
+            String selected = position == 1
+                    ? AppListPolicy.SORT_NAME
+                    : AppListPolicy.SORT_DEFAULT;
+            listPreferences.edit().putString(KEY_SORT_MODE, selected).apply();
+            ((AutoCompleteTextView) findViewById(R.id.sort_mode)).setText(
+                    position == 1 ? sortLabels[1] : sortLabels[0],
+                    false);
+            adapter.setSortMode(selected);
+            updateVisibleSortChoice(selected);
+            updateListState();
+        });
+        dialog.show();
+    }
+
+    private void updateListState() {
         emptyText.setText(R.string.no_apps);
         emptyText.setVisibility(adapter.isEmpty() ? View.VISIBLE : View.GONE);
+        listSummary.setText(getString(
+                R.string.list_summary,
+                adapter.getVisibleCount(),
+                adapter.getConfiguredCount()));
     }
 
     private void showProfileDialog(AppEntry app) {
@@ -281,7 +545,8 @@ public final class MainActivity extends AppCompatActivity
             } else {
                 dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener(button -> {
                     ProfileStore.delete(preferences, app.packageName());
-                    adapter.notifyDataSetChanged();
+                    adapter.refreshProfiles();
+                    updateListState();
                     Toast.makeText(this, R.string.profile_deleted, Toast.LENGTH_SHORT).show();
                     dialog.dismiss();
                 });
@@ -305,7 +570,8 @@ public final class MainActivity extends AppCompatActivity
                         appBytes,
                         dataBytes,
                         cacheBytes));
-                adapter.notifyDataSetChanged();
+                adapter.refreshProfiles();
+                updateListState();
                 Toast.makeText(this, R.string.profile_saved, Toast.LENGTH_SHORT).show();
                 dialog.dismiss();
             });
@@ -400,6 +666,7 @@ public final class MainActivity extends AppCompatActivity
     private void showAppearanceDialog() {
         View view = getLayoutInflater().inflate(R.layout.dialog_appearance, null);
         MaterialButtonToggleGroup uiGroup = view.findViewById(R.id.ui_mode_group);
+        MaterialButtonToggleGroup themeGroup = view.findViewById(R.id.theme_mode_group);
         RadioGroup colorGroup = view.findViewById(R.id.color_mode_group);
         RadioButton monet = view.findViewById(R.id.color_monet);
         RadioButton custom = view.findViewById(R.id.color_custom);
@@ -407,10 +674,25 @@ public final class MainActivity extends AppCompatActivity
         View customColorPreviewRow = view.findViewById(R.id.custom_color_preview_row);
         View customColorPreview = view.findViewById(R.id.custom_color_preview);
         TextView customColorValue = view.findViewById(R.id.custom_color_value);
+        appearanceBackgroundStatus = view.findViewById(R.id.background_status);
+        appearanceBackgroundBrightnessValue =
+                view.findViewById(R.id.background_brightness_value);
+        Slider backgroundBrightness =
+                view.findViewById(R.id.background_brightness_slider);
+        View chooseBackground = view.findViewById(R.id.choose_background);
+        View removeBackgroundButton = view.findViewById(R.id.remove_background);
         int[] selectedColor = {appearancePreferences.getSeedColor()};
+        pendingBackgroundUri = null;
+        pendingBackgroundBrightness = appearancePreferences.getBackgroundBrightness();
+        removeBackground = false;
 
         boolean customUi = AppearancePreferences.UI_CUSTOM.equals(appearancePreferences.getUiMode());
         uiGroup.check(customUi ? R.id.ui_custom : R.id.ui_material3);
+        themeGroup.check(switch (appearancePreferences.getThemeMode()) {
+            case AppearancePreferences.THEME_LIGHT -> R.id.theme_light;
+            case AppearancePreferences.THEME_DARK -> R.id.theme_dark;
+            default -> R.id.theme_system;
+        });
         boolean monetColor = AppearancePreferences.COLOR_MONET.equals(appearancePreferences.getColorMode());
         colorGroup.check(monetColor ? R.id.color_monet : R.id.color_custom);
         updateColorPreview(customColorPreview, customColorValue, selectedColor[0]);
@@ -418,6 +700,13 @@ public final class MainActivity extends AppCompatActivity
                 !monetColor,
                 customColorButton,
                 customColorPreviewRow);
+        backgroundBrightness.setValue(pendingBackgroundBrightness);
+        updateBackgroundBrightnessPreview(pendingBackgroundBrightness);
+        backgroundBrightness.addOnChangeListener((slider, value, fromUser) -> {
+            pendingBackgroundBrightness = Math.round(value);
+            updateBackgroundBrightnessPreview(pendingBackgroundBrightness);
+        });
+        updateBackgroundStatus();
         colorGroup.setOnCheckedChangeListener((group, checkedId) ->
                 setCustomColorControlsEnabled(
                         checkedId == R.id.color_custom,
@@ -429,30 +718,161 @@ public final class MainActivity extends AppCompatActivity
                     selectedColor[0] = color;
                     updateColorPreview(customColorPreview, customColorValue, color);
                 }));
+        chooseBackground.setOnClickListener(button -> backgroundPicker.launch(
+                new PickVisualMediaRequest.Builder()
+                        .setMediaType(ActivityResultContracts.PickVisualMedia.ImageOnly.INSTANCE)
+                        .build()));
+        removeBackgroundButton.setOnClickListener(button -> {
+            pendingBackgroundUri = null;
+            removeBackground = true;
+            updateBackgroundStatus();
+            hideBackgroundImage();
+        });
 
-        AlertDialog dialog = new AlertDialog.Builder(this)
+        appearanceDialog = new AlertDialog.Builder(this)
                 .setTitle(R.string.appearance)
                 .setView(view)
                 .setNegativeButton(R.string.cancel, null)
                 .setPositiveButton(R.string.apply, null)
                 .create();
-        dialog.setOnShowListener(ignored -> dialog.getButton(AlertDialog.BUTTON_POSITIVE)
-                .setOnClickListener(button -> {
-                    String uiMode = uiGroup.getCheckedButtonId() == R.id.ui_custom
-                            ? AppearancePreferences.UI_CUSTOM
-                            : AppearancePreferences.UI_MATERIAL3;
-                    String colorMode = colorGroup.getCheckedRadioButtonId() == R.id.color_monet
-                            ? AppearancePreferences.COLOR_MONET
-                            : AppearancePreferences.COLOR_CUSTOM;
-                    if (AppearancePreferences.COLOR_CUSTOM.equals(colorMode)) {
-                        appearancePreferences.setSeedColor(selectedColor[0]);
-                    }
-                    appearancePreferences.setUiMode(uiMode);
-                    appearancePreferences.setColorMode(colorMode);
-                    dialog.dismiss();
-                    recreate();
-                }));
-        dialog.show();
+        appearanceDialog.setOnDismissListener(ignored -> {
+            appearanceDialog = null;
+            appearanceBackgroundStatus = null;
+            appearanceBackgroundBrightnessValue = null;
+            pendingBackgroundUri = null;
+            pendingBackgroundBrightness = 0;
+            removeBackground = false;
+            applyBackgroundImage();
+        });
+        appearanceDialog.setOnShowListener(ignored ->
+                appearanceDialog.getButton(AlertDialog.BUTTON_POSITIVE)
+                        .setOnClickListener(button -> {
+                            String uiMode = uiGroup.getCheckedButtonId() == R.id.ui_custom
+                                    ? AppearancePreferences.UI_CUSTOM
+                                    : AppearancePreferences.UI_MATERIAL3;
+                            String colorMode = colorGroup.getCheckedRadioButtonId() == R.id.color_monet
+                                    ? AppearancePreferences.COLOR_MONET
+                                    : AppearancePreferences.COLOR_CUSTOM;
+                            int checkedThemeId = themeGroup.getCheckedButtonId();
+                            String themeMode = checkedThemeId == R.id.theme_light
+                                    ? AppearancePreferences.THEME_LIGHT
+                                    : checkedThemeId == R.id.theme_dark
+                                            ? AppearancePreferences.THEME_DARK
+                                            : AppearancePreferences.THEME_SYSTEM;
+                            if (AppearancePreferences.COLOR_CUSTOM.equals(colorMode)) {
+                                appearancePreferences.setSeedColor(selectedColor[0]);
+                            }
+                            if (removeBackground) {
+                                appearancePreferences.setBackgroundUri("");
+                            } else if (pendingBackgroundUri != null) {
+                                appearancePreferences.setBackgroundUri(pendingBackgroundUri.toString());
+                            }
+                            appearancePreferences.setBackgroundBrightness(
+                                    pendingBackgroundBrightness);
+                            appearancePreferences.setUiMode(uiMode);
+                            appearancePreferences.setColorMode(colorMode);
+                            appearancePreferences.setThemeMode(themeMode);
+                            StorageSpoofApplication.applyThemeMode(themeMode);
+                            appearanceDialog.dismiss();
+                            recreate();
+                        }));
+        appearanceDialog.show();
+    }
+
+    private void onBackgroundSelected(@Nullable Uri uri) {
+        if (uri == null || appearanceDialog == null) {
+            return;
+        }
+        try {
+            getContentResolver().takePersistableUriPermission(
+                    uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        } catch (SecurityException ignored) {
+            // Some picker providers grant durable access without an explicit persist call.
+        }
+        pendingBackgroundUri = uri;
+        removeBackground = false;
+        updateBackgroundStatus();
+        showBackgroundPreview(uri);
+    }
+
+    private void updateBackgroundStatus() {
+        if (appearanceBackgroundStatus == null) {
+            return;
+        }
+        boolean selected = !removeBackground
+                && (pendingBackgroundUri != null
+                || !appearancePreferences.getBackgroundUri().isBlank());
+        appearanceBackgroundStatus.setText(selected
+                ? R.string.background_selected
+                : R.string.background_none);
+    }
+
+    private void applyBackgroundImage() {
+        String value = appearancePreferences.getBackgroundUri();
+        if (value.isBlank()) {
+            hideBackgroundImage();
+            return;
+        }
+        showBackgroundPreview(Uri.parse(value));
+        updateBackgroundScrim(appearancePreferences.getBackgroundBrightness());
+    }
+
+    private void showBackgroundPreview(Uri uri) {
+        ImageView background = findViewById(R.id.background_image);
+        View scrim = findViewById(R.id.background_scrim);
+        try {
+            ImageDecoder.Source source = ImageDecoder.createSource(
+                    getContentResolver(),
+                    uri);
+            Drawable drawable = ImageDecoder.decodeDrawable(source);
+            background.setScaleType(ImageView.ScaleType.CENTER_CROP);
+            background.setAdjustViewBounds(false);
+            background.setImageDrawable(drawable);
+            background.setVisibility(View.VISIBLE);
+            scrim.setVisibility(View.VISIBLE);
+            updateBackgroundScrim(appearanceDialog != null
+                    ? pendingBackgroundBrightness
+                    : appearancePreferences.getBackgroundBrightness());
+        } catch (Exception exception) {
+            if (appearanceDialog == null) {
+                appearancePreferences.setBackgroundUri("");
+            }
+            hideBackgroundImage();
+            Toast.makeText(
+                    this,
+                    R.string.background_load_failed,
+                    Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void hideBackgroundImage() {
+        ImageView background = findViewById(R.id.background_image);
+        View scrim = findViewById(R.id.background_scrim);
+        background.setImageDrawable(null);
+        background.setVisibility(View.GONE);
+        scrim.setVisibility(View.GONE);
+    }
+
+    private void updateBackgroundBrightnessPreview(int brightness) {
+        if (appearanceBackgroundBrightnessValue != null) {
+            appearanceBackgroundBrightnessValue.setText(getString(
+                    R.string.background_brightness,
+                    brightness));
+        }
+        updateBackgroundScrim(brightness);
+    }
+
+    private void updateBackgroundScrim(int brightness) {
+        View scrim = findViewById(R.id.background_scrim);
+        ImageView background = findViewById(R.id.background_image);
+        if (scrim == null || background == null
+                || background.getVisibility() != View.VISIBLE) {
+            return;
+        }
+        float requestedAlpha = 1.0f
+                - Math.max(0, Math.min(100, brightness)) / 100.0f;
+        scrim.setAlpha(Math.max(0.18f, requestedAlpha));
     }
 
     private void showColorPicker(int initialColor, ColorSelectionListener listener) {

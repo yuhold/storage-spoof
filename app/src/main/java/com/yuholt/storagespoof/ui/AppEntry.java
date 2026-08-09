@@ -7,5 +7,6 @@ import androidx.annotation.NonNull;
 public record AppEntry(
         @NonNull String label,
         @NonNull String packageName,
-        @NonNull Drawable icon) {
+        @NonNull Drawable icon,
+        boolean systemApp) {
 }

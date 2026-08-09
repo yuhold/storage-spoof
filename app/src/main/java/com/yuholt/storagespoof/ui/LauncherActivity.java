@@ -4,10 +4,14 @@ import android.app.AppOpsManager;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
+import android.graphics.ImageDecoder;
+import android.graphics.drawable.Drawable;
+import android.net.Uri;
 import android.os.Bundle;
 import android.os.Process;
 import android.provider.Settings;
 import android.view.View;
+import android.widget.ImageView;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -58,7 +62,12 @@ public final class LauncherActivity extends AppCompatActivity
             openConfigurationAndFinish();
             return;
         }
-        setContentView(R.layout.activity_launcher);
+        boolean customUi = AppearancePreferences.UI_CUSTOM.equals(
+                appearancePreferences.getUiMode());
+        setContentView(customUi
+                ? R.layout.activity_launcher_custom
+                : R.layout.activity_launcher);
+        applyBackgroundImage();
 
         disclaimerAccepted = findViewById(R.id.disclaimer_accepted);
         readinessSummary = findViewById(R.id.readiness_summary);
@@ -104,6 +113,39 @@ public final class LauncherActivity extends AppCompatActivity
                 new DynamicColorsOptions.Builder()
                         .setContentBasedSource(appearancePreferences.getSeedColor())
                         .build());
+    }
+
+    private void applyBackgroundImage() {
+        String value = appearancePreferences.getBackgroundUri();
+        if (value.isBlank()) {
+            return;
+        }
+        ImageView background = findViewById(R.id.background_image);
+        View scrim = findViewById(R.id.background_scrim);
+        try {
+            ImageDecoder.Source source = ImageDecoder.createSource(
+                    getContentResolver(),
+                    Uri.parse(value));
+            Drawable drawable = ImageDecoder.decodeDrawable(source);
+            background.setScaleType(ImageView.ScaleType.CENTER_CROP);
+            background.setAdjustViewBounds(false);
+            background.setImageDrawable(drawable);
+            background.setVisibility(View.VISIBLE);
+            scrim.setVisibility(View.VISIBLE);
+            int brightness = appearancePreferences.getBackgroundBrightness();
+            float requestedAlpha = 1.0f
+                    - Math.max(0, Math.min(100, brightness)) / 100.0f;
+            scrim.setAlpha(Math.max(0.18f, requestedAlpha));
+        } catch (Exception exception) {
+            appearancePreferences.setBackgroundUri("");
+            background.setImageDrawable(null);
+            background.setVisibility(View.GONE);
+            scrim.setVisibility(View.GONE);
+            Toast.makeText(
+                    this,
+                    R.string.background_load_failed,
+                    Toast.LENGTH_SHORT).show();
+        }
     }
 
     private void runReadinessCheck(@Nullable XposedService service) {

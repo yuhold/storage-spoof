@@ -7,5 +7,6 @@
         <item name="colorOnPrimaryContainer">@color/on_primary_container</item>
         <item name="android:statusBarColor">?attr/colorSurface</item>
         <item name="android:navigationBarColor">?attr/colorSurface</item>
+        <item name="android:windowLightStatusBar">false</item>
     </style>
 </resources>
