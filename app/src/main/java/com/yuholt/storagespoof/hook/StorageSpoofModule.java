@@ -141,8 +141,8 @@ public final class StorageSpoofModule extends XposedModule {
         if (hooksInstalled || !policy.hasEnabledHooks()) {
             return;
         }
+        int installedCount = 0;
         try {
-            int installedCount = 0;
             if (policy.packageStatsSpoofing()) {
                 Class<?> managerClass = Class.forName(
                         "android.app.usage.StorageStatsManager",
@@ -156,15 +156,22 @@ public final class StorageSpoofModule extends XposedModule {
             hooksInstalled = installedCount > 0;
             log(Log.INFO, TAG, "Installed " + installedCount + " storage hook(s)");
         } catch (Throwable throwable) {
-            log(Log.ERROR, TAG, "Failed to install storage hooks", throwable);
+            hooksInstalled = installedCount > 0;
+            log(Log.ERROR, TAG, "Failed to resolve storage hooks after installing "
+                    + installedCount + " hook(s)", throwable);
         }
     }
 
     private int installPackageStorageHooks(Class<?> managerClass) {
         int installedCount = 0;
         for (Method method : collectPackageStorageMethods(managerClass)) {
-            installPackageStorageHook(method);
-            installedCount++;
+            try {
+                installPackageStorageHook(method);
+                installedCount++;
+            } catch (Throwable throwable) {
+                log(Log.ERROR, TAG, "Failed to install cold package hook for "
+                        + executableKey(method), throwable);
+            }
         }
         return installedCount;
     }
@@ -248,47 +255,76 @@ public final class StorageSpoofModule extends XposedModule {
         List<HookMigrationPlan.ExistingHook> existingHooks = new ArrayList<>();
         Map<HookMigrationPlan.ExistingHook, XposedInterface.HookHandle> handlesByDescriptor =
                 new IdentityHashMap<>();
-        List<XposedInterface.HookHandle> malformedOwnedHandles = new ArrayList<>();
+        boolean cleanupComplete = true;
+        int handleIndex = 0;
         for (XposedInterface.HookHandle handle : param.getOldHookHandles()) {
-            String id;
+            String id = null;
+            boolean idReadable = true;
             try {
                 id = handle.getId();
             } catch (Throwable throwable) {
-                log(Log.ERROR, TAG, "Failed to inspect old hook ID; leaving unknown handle alone",
-                        throwable);
-                continue;
+                idReadable = false;
+                log(Log.ERROR, TAG, "Failed to inspect old hook ID; using conservative ownership "
+                        + "classification", throwable);
             }
-            if (!isModuleOwnedHookId(id)) {
-                continue;
-            }
-            try {
-                Executable executable = handle.getExecutable();
-                if (executable == null) {
-                    malformedOwnedHandles.add(handle);
-                    log(Log.ERROR, TAG, "Module-owned old hook has no executable: " + id);
-                    continue;
-                }
-                HookMigrationPlan.ExistingHook descriptor = HookMigrationPlan.existing(
-                        id, executableKey(executable));
-                existingHooks.add(descriptor);
-                handlesByDescriptor.put(descriptor, handle);
-            } catch (Throwable throwable) {
-                malformedOwnedHandles.add(handle);
-                log(Log.ERROR, TAG, "Failed to inspect module-owned old hook: " + id, throwable);
-            }
-        }
 
-        for (XposedInterface.HookHandle handle : malformedOwnedHandles) {
-            unhookOldHandle(handle, "malformed module-owned hook");
+            Executable executable = null;
+            try {
+                executable = handle.getExecutable();
+            } catch (Throwable throwable) {
+                if (!idReadable || id == null || isModuleOwnedHookId(id)) {
+                    cleanupComplete &= unhookOldHandle(handle,
+                            "unreadable module-owned hook");
+                    log(Log.ERROR, TAG, "Failed to inspect module-owned old hook executable: "
+                            + printableHookId(id), throwable);
+                } else {
+                    log(Log.ERROR, TAG, "Failed to inspect identifiable non-module hook executable; "
+                            + "leaving it alone: " + printableHookId(id), throwable);
+                }
+                handleIndex++;
+                continue;
+            }
+
+            boolean storageExecutable = isPackageStorageExecutable(executable);
+            boolean moduleOwned = HookMigrationPlan.isModuleOwnedStorageHandle(
+                    id, idReadable, storageExecutable) || (idReadable && isModuleOwnedHookId(id));
+            if (!moduleOwned) {
+                handleIndex++;
+                continue;
+            }
+            if (executable == null) {
+                cleanupComplete &= unhookOldHandle(handle,
+                        "module-owned hook with no executable");
+                log(Log.ERROR, TAG, "Module-owned old hook has no executable: "
+                        + printableHookId(id));
+                handleIndex++;
+                continue;
+            }
+
+            String executableKey = executableKey(executable);
+            String descriptorId = id != null
+                    ? id
+                    : "storage-spoof-package-unknown-" + packageHookId(executableKey)
+                            + "-" + handleIndex;
+            HookMigrationPlan.ExistingHook descriptor = HookMigrationPlan.existing(
+                    descriptorId, executableKey);
+            existingHooks.add(descriptor);
+            handlesByDescriptor.put(descriptor, handle);
+            handleIndex++;
         }
 
         if (!policy.hasEnabledHooks() || hostPackageName == null) {
-            for (HookMigrationPlan.ExistingHook existing : existingHooks) {
-                unhookOldHandle(handlesByDescriptor.get(existing), existing.id());
-            }
+            boolean descriptorCleanupComplete = unhookDescriptors(existingHooks,
+                    handlesByDescriptor, "disabled host");
+            cleanupComplete &= descriptorCleanupComplete;
             hooksInstalled = false;
-            log(Log.WARN, TAG, "Storage hooks disabled after hot reload for host identity: "
-                    + hostPackageName);
+            if (cleanupComplete) {
+                log(Log.WARN, TAG, "Storage hooks disabled after hot reload for host identity: "
+                        + hostPackageName);
+            } else {
+                log(Log.ERROR, TAG, "FAIL-CLOSED cleanup incomplete after hot reload for host "
+                        + hostPackageName);
+            }
             return;
         }
 
@@ -301,11 +337,16 @@ public final class StorageSpoofModule extends XposedModule {
                             HookMigrationPlan.desired(executableKey(method)), method))
                     .toList();
         } catch (Throwable throwable) {
-            for (HookMigrationPlan.ExistingHook existing : existingHooks) {
-                unhookOldHandle(handlesByDescriptor.get(existing), existing.id());
-            }
+            boolean descriptorCleanupComplete = unhookDescriptors(existingHooks,
+                    handlesByDescriptor, "desired hook resolution failure");
+            cleanupComplete &= descriptorCleanupComplete;
             hooksInstalled = false;
-            log(Log.ERROR, TAG, "Failed to resolve desired storage hooks; disabled", throwable);
+            if (cleanupComplete) {
+                log(Log.ERROR, TAG, "Failed to resolve desired storage hooks; disabled", throwable);
+            } else {
+                log(Log.ERROR, TAG, "FAIL-CLOSED cleanup incomplete after desired hook resolution "
+                        + "failure", throwable);
+            }
             return;
         }
 
@@ -346,7 +387,7 @@ public final class StorageSpoofModule extends XposedModule {
                             activeDesiredHooks++;
                         }
                     }
-                    case UNHOOK -> unhookOldHandle(
+                    case UNHOOK -> cleanupComplete &= unhookOldHandle(
                             handlesByDescriptor.get(action.existing()), action.existing().id());
                     case DISABLE -> {
                         // The disabled policy is handled before desired hooks are resolved.
@@ -357,7 +398,11 @@ public final class StorageSpoofModule extends XposedModule {
                         throwable);
             }
         }
-        hooksInstalled = activeDesiredHooks > 0;
+        hooksInstalled = activeDesiredHooks > 0 && cleanupComplete;
+        if (!cleanupComplete) {
+            log(Log.ERROR, TAG, "FAIL-CLOSED migration cleanup incomplete; old module hooks "
+                    + "may remain active");
+        }
         log(Log.INFO, TAG, "Hot reload activated " + activeDesiredHooks
                 + " package storage hook(s)");
     }
@@ -393,6 +438,29 @@ public final class StorageSpoofModule extends XposedModule {
         }
     }
 
+    private boolean unhookDescriptors(
+            List<HookMigrationPlan.ExistingHook> descriptors,
+            Map<HookMigrationPlan.ExistingHook, XposedInterface.HookHandle> handlesByDescriptor,
+            String reason) {
+        boolean complete = true;
+        for (HookMigrationPlan.ExistingHook descriptor : descriptors) {
+            if (!unhookOldHandle(handlesByDescriptor.get(descriptor),
+                    descriptor.id() + " (" + reason + ")")) {
+                complete = false;
+            }
+        }
+        return complete;
+    }
+
+    private static boolean isPackageStorageExecutable(Executable executable) {
+        return executable instanceof Method method
+                && "queryStatsForPackage".equals(method.getName())
+                && StorageStats.class.isAssignableFrom(method.getReturnType());
+    }
+
+    private static String printableHookId(String id) {
+        return id == null ? "<missing>" : id;
+    }
     private static boolean isModuleOwnedHookId(String id) {
         return id != null && (id.startsWith("storage-spoof-package-")
                 || "storage-spoof-hyperos-summary".equals(id)

@@ -1,6 +1,7 @@
 package com.yuholt.storagespoof.hook;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 import java.util.List;
@@ -73,6 +74,36 @@ public class HookMigrationPlanTest {
         assertEquals(HookMigrationPlan.ActionKind.DISABLE, actions.get(1).kind());
     }
 
+    @Test
+    public void unhookFailurePreventsFailClosedClaim() {
+        HookMigrationPlan.CleanupResult result = HookMigrationPlan.cleanup(
+                List.of(
+                        new HookMigrationPlan.CleanupAttempt("old-one", true),
+                        new HookMigrationPlan.CleanupAttempt("old-two", false)));
+
+        assertFalse(result.isComplete());
+        assertEquals(List.of("old-two"), result.failedIds());
+    }
+    @Test
+    public void storageExecutableIsCleanupCandidateWithoutReliableId() {
+        assertTrue(HookMigrationPlan.isModuleOwnedStorageHandle(null, true));
+        assertTrue(HookMigrationPlan.isModuleOwnedStorageHandle(null, false, false));
+        assertTrue(HookMigrationPlan.isModuleOwnedStorageHandle(null, true, false));
+        assertTrue(HookMigrationPlan.isModuleOwnedStorageHandle("third-party-id", true));
+        assertTrue(HookMigrationPlan.isModuleOwnedStorageHandle(
+                "storage-spoof-hyperos-summary", false));
+        assertFalse(HookMigrationPlan.isModuleOwnedStorageHandle("third-party-id", false));
+    }
+
+    @Test
+    public void installationCountIncludesSuccessAfterFailure() {
+        int successful = HookMigrationPlan.countSuccessfulInstallations(
+                List.of(
+                        new HookMigrationPlan.InstallationAttempt("first", false),
+                        new HookMigrationPlan.InstallationAttempt("second", true)));
+
+        assertEquals(1, successful);
+    }
     @Test
     public void actionOrderingIsDeterministic() {
         List<HookMigrationPlan.Action> first = HookMigrationPlan.plan(

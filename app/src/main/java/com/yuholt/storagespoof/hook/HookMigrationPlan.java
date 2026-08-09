@@ -41,6 +41,62 @@ public final class HookMigrationPlan {
         }
     }
 
+    public record CleanupAttempt(String id, boolean succeeded) {
+        public CleanupAttempt {
+            Objects.requireNonNull(id);
+        }
+    }
+
+    public record CleanupResult(List<String> failedIds) {
+        public CleanupResult {
+            failedIds = List.copyOf(failedIds);
+        }
+
+        public boolean isComplete() {
+            return failedIds.isEmpty();
+        }
+    }
+
+    public record InstallationAttempt(String executableKey, boolean succeeded) {
+        public InstallationAttempt {
+            Objects.requireNonNull(executableKey);
+        }
+    }
+
+    public static CleanupResult cleanup(List<CleanupAttempt> attempts) {
+        List<String> failedIds = new ArrayList<>();
+        for (CleanupAttempt attempt : attempts) {
+            if (!attempt.succeeded()) {
+                failedIds.add(attempt.id());
+            }
+        }
+        return new CleanupResult(failedIds);
+    }
+
+    public static int countSuccessfulInstallations(List<InstallationAttempt> attempts) {
+        int successful = 0;
+        for (InstallationAttempt attempt : attempts) {
+            if (attempt.succeeded()) {
+                successful++;
+            }
+        }
+        return successful;
+    }
+
+    public static boolean isModuleOwnedStorageHandle(String id, boolean storageExecutable) {
+        return isModuleOwnedStorageHandle(id, true, storageExecutable);
+    }
+
+    public static boolean isModuleOwnedStorageHandle(
+            String id,
+            boolean idReadable,
+            boolean executableKnown) {
+        return executableKnown || (id != null && (id.startsWith("storage-spoof-package-")
+                || "storage-spoof-hyperos-summary".equals(id)
+                || "storage-spoof-hyperos-available".equals(id)))
+                || (!idReadable && id == null && !executableKnown);
+    }
+
     public static DesiredHook desired(String executableKey) {
         return new DesiredHook(executableKey);
     }
