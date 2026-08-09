@@ -60,6 +60,9 @@ jobs:
           fi
           echo "name=$version_name" >> "$GITHUB_OUTPUT"
 
+      - name: Make Gradle wrapper executable
+        run: chmod +x gradlew
+
       - name: Test, lint, and build signed APK
         run: ./gradlew --no-daemon :app:testDebugUnitTest :app:lintDebug :app:assembleRelease
 
