@@ -1,11 +1,16 @@
 package com.yuholt.storagespoof.ui;
 
+import android.app.usage.StorageStats;
+import android.app.usage.StorageStatsManager;
 import android.content.SharedPreferences;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
+import android.graphics.Color;
+import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
 import android.os.Environment;
 import android.os.StatFs;
+import android.os.UserHandle;
 import android.text.Editable;
 import android.text.TextWatcher;
 import android.view.Menu;
@@ -29,12 +34,13 @@ import com.google.android.material.button.MaterialButtonToggleGroup;
 import com.google.android.material.color.DynamicColors;
 import com.google.android.material.color.DynamicColorsOptions;
 import com.google.android.material.materialswitch.MaterialSwitch;
-import com.google.android.material.textfield.TextInputLayout;
+import com.google.android.material.slider.Slider;
 import com.yuholt.storagespoof.R;
 import com.yuholt.storagespoof.StorageSpoofApplication;
 import com.yuholt.storagespoof.config.ProfileStore;
 import com.yuholt.storagespoof.config.SpoofProfile;
 
+import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -47,6 +53,9 @@ public final class MainActivity extends AppCompatActivity
         implements StorageSpoofApplication.ServiceStateListener {
     private static final int MENU_APPEARANCE = 1;
     private static final int MENU_ABOUT = 2;
+    private static final long DEFAULT_APP_BYTES = 128L << 20;
+    private static final long DEFAULT_DATA_BYTES = 64L << 20;
+    private static final long DEFAULT_CACHE_BYTES = 16L << 20;
 
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
 
@@ -207,9 +216,9 @@ public final class MainActivity extends AppCompatActivity
         packageName.setText(app.packageName());
         SpoofProfile existing = ProfileStore.get(preferences, app.packageName());
         long maximumBytes = getInternalStorageCapacity();
-        long initialAppBytes = existing == null ? 0L : existing.getAppBytes();
-        long initialDataBytes = existing == null ? 0L : existing.getDataBytes();
-        long initialCacheBytes = existing == null ? 0L : existing.getCacheBytes();
+        long initialAppBytes = existing == null ? DEFAULT_APP_BYTES : existing.getAppBytes();
+        long initialDataBytes = existing == null ? DEFAULT_DATA_BYTES : existing.getDataBytes();
+        long initialCacheBytes = existing == null ? DEFAULT_CACHE_BYTES : existing.getCacheBytes();
         storageLimit.setText(getString(R.string.storage_limit, SizeParser.format(maximumBytes)));
 
         SizeSliderControl appSize = new SizeSliderControl(
@@ -239,6 +248,10 @@ public final class MainActivity extends AppCompatActivity
                 R.id.cache_unit_gb,
                 maximumBytes,
                 initialCacheBytes);
+
+        if (existing == null) {
+            loadRealSizeDefaults(app, maximumBytes, appSize, dataSize, cacheSize);
+        }
 
         if (existing != null) {
             enabled.setChecked(existing.isEnabled());
@@ -292,6 +305,65 @@ public final class MainActivity extends AppCompatActivity
         dialog.show();
     }
 
+    private void loadRealSizeDefaults(
+            AppEntry app,
+            long maximumBytes,
+            SizeSliderControl appSize,
+            SizeSliderControl dataSize,
+            SizeSliderControl cacheSize) {
+        executor.execute(() -> {
+            RealSize realSize = queryRealSize(app.packageName());
+            if (realSize == null) {
+                return;
+            }
+            runOnUiThread(() -> {
+                long appBytes = Math.min(realSize.appBytes, maximumBytes);
+                long dataBytes = Math.min(realSize.dataBytes, maximumBytes);
+                long cacheBytes = Math.min(realSize.cacheBytes, maximumBytes);
+                if (exceedsCapacity(appBytes, dataBytes, cacheBytes, maximumBytes)) {
+                    return;
+                }
+                appSize.setBytesIfUnchanged(appBytes);
+                dataSize.setBytesIfUnchanged(dataBytes);
+                cacheSize.setBytesIfUnchanged(cacheBytes);
+            });
+        });
+    }
+
+    @Nullable
+    private RealSize queryRealSize(String packageName) {
+        try {
+            ApplicationInfo info = getPackageManager().getApplicationInfo(packageName, 0);
+            StorageStatsManager manager = getSystemService(StorageStatsManager.class);
+            if (manager == null) {
+                return null;
+            }
+            StorageStats stats = manager.queryStatsForPackage(
+                    info.storageUuid,
+                    packageName,
+                    UserHandle.getUserHandleForUid(info.uid));
+            return new RealSize(
+                    getAccurateAppBytes(stats),
+                    stats.getDataBytes(),
+                    stats.getCacheBytes());
+        } catch (Exception exception) {
+            return null;
+        }
+    }
+
+    private static long getAccurateAppBytes(StorageStats stats) {
+        try {
+            Method method = stats.getClass().getMethod("getAppAccurateBytes");
+            Object result = method.invoke(stats);
+            if (result instanceof Long appBytes) {
+                return appBytes;
+            }
+        } catch (ReflectiveOperationException ignored) {
+            // Fall back to the public AOSP app byte total.
+        }
+        return stats.getAppBytes();
+    }
+
     private static long getInternalStorageCapacity() {
         StatFs statFs = new StatFs(Environment.getDataDirectory().getAbsolutePath());
         return statFs.getTotalBytes();
@@ -323,17 +395,32 @@ public final class MainActivity extends AppCompatActivity
         RadioGroup colorGroup = view.findViewById(R.id.color_mode_group);
         RadioButton monet = view.findViewById(R.id.color_monet);
         RadioButton custom = view.findViewById(R.id.color_custom);
-        TextInputLayout colorLayout = view.findViewById(R.id.custom_color_layout);
-        EditText colorInput = view.findViewById(R.id.custom_color);
+        View customColorButton = view.findViewById(R.id.custom_color_button);
+        View customColorPreviewRow = view.findViewById(R.id.custom_color_preview_row);
+        View customColorPreview = view.findViewById(R.id.custom_color_preview);
+        TextView customColorValue = view.findViewById(R.id.custom_color_value);
+        int[] selectedColor = {appearancePreferences.getSeedColor()};
 
         boolean customUi = AppearancePreferences.UI_CUSTOM.equals(appearancePreferences.getUiMode());
         uiGroup.check(customUi ? R.id.ui_custom : R.id.ui_material3);
         boolean monetColor = AppearancePreferences.COLOR_MONET.equals(appearancePreferences.getColorMode());
         colorGroup.check(monetColor ? R.id.color_monet : R.id.color_custom);
-        colorInput.setText(AppearancePreferences.formatColor(appearancePreferences.getSeedColor()));
-        colorLayout.setEnabled(!monetColor);
+        updateColorPreview(customColorPreview, customColorValue, selectedColor[0]);
+        setCustomColorControlsEnabled(
+                !monetColor,
+                customColorButton,
+                customColorPreviewRow);
         colorGroup.setOnCheckedChangeListener((group, checkedId) ->
-                colorLayout.setEnabled(checkedId == R.id.color_custom));
+                setCustomColorControlsEnabled(
+                        checkedId == R.id.color_custom,
+                        customColorButton,
+                        customColorPreviewRow));
+        customColorButton.setOnClickListener(button -> showColorPicker(
+                selectedColor[0],
+                color -> {
+                    selectedColor[0] = color;
+                    updateColorPreview(customColorPreview, customColorValue, color);
+                }));
 
         AlertDialog dialog = new AlertDialog.Builder(this)
                 .setTitle(R.string.appearance)
@@ -350,14 +437,7 @@ public final class MainActivity extends AppCompatActivity
                             ? AppearancePreferences.COLOR_MONET
                             : AppearancePreferences.COLOR_CUSTOM;
                     if (AppearancePreferences.COLOR_CUSTOM.equals(colorMode)) {
-                        try {
-                            appearancePreferences.setSeedColor(AppearancePreferences.parseColor(
-                                    colorInput.getText() == null ? "" : colorInput.getText().toString()));
-                            colorLayout.setError(null);
-                        } catch (IllegalArgumentException exception) {
-                            colorLayout.setError(getString(R.string.invalid_color));
-                            return;
-                        }
+                        appearancePreferences.setSeedColor(selectedColor[0]);
                     }
                     appearancePreferences.setUiMode(uiMode);
                     appearancePreferences.setColorMode(colorMode);
@@ -365,6 +445,65 @@ public final class MainActivity extends AppCompatActivity
                     recreate();
                 }));
         dialog.show();
+    }
+
+    private void showColorPicker(int initialColor, ColorSelectionListener listener) {
+        View view = getLayoutInflater().inflate(R.layout.dialog_color_picker, null);
+        View preview = view.findViewById(R.id.color_preview);
+        TextView value = view.findViewById(R.id.color_value);
+        Slider hue = view.findViewById(R.id.color_hue_slider);
+        Slider saturation = view.findViewById(R.id.color_saturation_slider);
+        Slider brightness = view.findViewById(R.id.color_brightness_slider);
+        float[] hsv = new float[3];
+        Color.colorToHSV(initialColor, hsv);
+        hue.setValue(hsv[0]);
+        saturation.setValue(hsv[1] * 100.0f);
+        brightness.setValue(hsv[2] * 100.0f);
+        int[] selectedColor = {initialColor};
+        Slider.OnChangeListener changeListener = (slider, sliderValue, fromUser) -> {
+            selectedColor[0] = Color.HSVToColor(new float[]{
+                    hue.getValue(),
+                    saturation.getValue() / 100.0f,
+                    brightness.getValue() / 100.0f
+            });
+            updateColorPreview(preview, value, selectedColor[0]);
+        };
+        hue.addOnChangeListener(changeListener);
+        saturation.addOnChangeListener(changeListener);
+        brightness.addOnChangeListener(changeListener);
+        updateColorPreview(preview, value, initialColor);
+
+        new AlertDialog.Builder(this)
+                .setTitle(R.string.color_picker_title)
+                .setView(view)
+                .setNegativeButton(R.string.cancel, null)
+                .setPositiveButton(R.string.apply, (dialog, which) ->
+                        listener.onColorSelected(selectedColor[0]))
+                .show();
+    }
+
+    private static void setCustomColorControlsEnabled(
+            boolean enabled,
+            View button,
+            View previewRow) {
+        button.setEnabled(enabled);
+        previewRow.setEnabled(enabled);
+        previewRow.setAlpha(enabled ? 1.0f : 0.38f);
+    }
+
+    private static void updateColorPreview(View preview, TextView value, int color) {
+        GradientDrawable background = new GradientDrawable();
+        background.setColor(color);
+        background.setCornerRadius(16.0f * preview.getResources().getDisplayMetrics().density);
+        preview.setBackground(background);
+        value.setText(AppearancePreferences.formatColor(color));
+    }
+
+    private interface ColorSelectionListener {
+        void onColorSelected(int color);
+    }
+
+    private record RealSize(long appBytes, long dataBytes, long cacheBytes) {
     }
 
     private abstract static class SimpleTextWatcher implements TextWatcher {

@@ -1,9 +1,12 @@
 package com.yuholt.storagespoof.ui;
 
+import android.app.AppOpsManager;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.os.Bundle;
+import android.os.Process;
+import android.provider.Settings;
 import android.view.View;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -36,6 +39,7 @@ public final class LauncherActivity extends AppCompatActivity
     private MaterialCheckBox disclaimerAccepted;
     private TextView readinessSummary;
     private TextView readinessDetails;
+    private MaterialButton usageAccessButton;
     private MaterialButton continueButton;
     private List<String> currentIssues = List.of();
 
@@ -49,6 +53,7 @@ public final class LauncherActivity extends AppCompatActivity
         disclaimerAccepted = findViewById(R.id.disclaimer_accepted);
         readinessSummary = findViewById(R.id.readiness_summary);
         readinessDetails = findViewById(R.id.readiness_details);
+        usageAccessButton = findViewById(R.id.usage_access_button);
         continueButton = findViewById(R.id.continue_button);
         SharedPreferences onboarding = getSharedPreferences(PREFERENCES_NAME, MODE_PRIVATE);
         disclaimerAccepted.setChecked(onboarding.getBoolean(KEY_DISCLAIMER_ACCEPTED, false));
@@ -56,6 +61,7 @@ public final class LauncherActivity extends AppCompatActivity
                 onboarding.edit().putBoolean(KEY_DISCLAIMER_ACCEPTED, checked).apply());
 
         findViewById(R.id.about_button).setOnClickListener(view -> openAbout());
+        usageAccessButton.setOnClickListener(view -> openUsageAccessSettings());
         findViewById(R.id.recheck_button).setOnClickListener(view -> runReadinessCheck(
                 StorageSpoofApplication.getService()));
         continueButton.setOnClickListener(view -> continueToConfiguration());
@@ -96,6 +102,12 @@ public final class LauncherActivity extends AppCompatActivity
         List<String> status = new ArrayList<>();
         List<String> installedTargets = getInstalledTargets();
 
+        if (hasUsageAccess()) {
+            status.add(getString(R.string.readiness_usage_access_ok));
+        } else {
+            issues.add(getString(R.string.readiness_usage_access_missing));
+        }
+
         if (installedTargets.isEmpty()) {
             issues.add(getString(R.string.readiness_no_target));
         }
@@ -129,6 +141,29 @@ public final class LauncherActivity extends AppCompatActivity
         details.addAll(issues);
         readinessDetails.setText(String.join("\n", details));
         readinessDetails.setVisibility(details.isEmpty() ? View.GONE : View.VISIBLE);
+        usageAccessButton.setVisibility(hasUsageAccess() ? View.GONE : View.VISIBLE);
+    }
+
+    private boolean hasUsageAccess() {
+        AppOpsManager appOps = getSystemService(AppOpsManager.class);
+        if (appOps == null) {
+            return false;
+        }
+        int mode = appOps.checkOpNoThrow(
+                AppOpsManager.OPSTR_GET_USAGE_STATS,
+                Process.myUid(),
+                getPackageName());
+        return mode == AppOpsManager.MODE_ALLOWED;
+    }
+
+    private void openUsageAccessSettings() {
+        Intent intent = new Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS);
+        intent.setData(android.net.Uri.parse("package:" + getPackageName()));
+        try {
+            startActivity(intent);
+        } catch (android.content.ActivityNotFoundException exception) {
+            startActivity(new Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS));
+        }
     }
 
     private List<String> getInstalledTargets() {

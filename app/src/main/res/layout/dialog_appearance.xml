@@ -65,20 +65,35 @@
             android:text="@string/color_custom" />
     </RadioGroup>
 
-    <com.google.android.material.textfield.TextInputLayout
-        android:id="@+id/custom_color_layout"
-        style="@style/Widget.Material3.TextInputLayout.OutlinedBox"
+    <com.google.android.material.button.MaterialButton
+        android:id="@+id/custom_color_button"
+        style="@style/Widget.Material3.Button.OutlinedButton"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginTop="8dp"
-        android:hint="@string/custom_color_hint">
+        android:text="@string/choose_custom_color" />
 
-        <com.google.android.material.textfield.TextInputEditText
-            android:id="@+id/custom_color"
-            android:layout_width="match_parent"
+    <LinearLayout
+        android:id="@+id/custom_color_preview_row"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+
+        <View
+            android:id="@+id/custom_color_preview"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:background="@drawable/color_preview_background" />
+
+        <TextView
+            android:id="@+id/custom_color_value"
+            android:layout_width="0dp"
             android:layout_height="wrap_content"
-            android:inputType="textCapCharacters"
-            android:maxLines="1" />
-    </com.google.android.material.textfield.TextInputLayout>
+            android:layout_marginStart="12dp"
+            android:layout_weight="1"
+            android:textAppearance="?attr/textAppearanceBodyLarge" />
+    </LinearLayout>
 
 </LinearLayout>

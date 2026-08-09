@@ -36,8 +36,11 @@
     <string name="color_source">颜色来源</string>
     <string name="color_monet">莫奈动态取色</string>
     <string name="color_custom">自定义主题色</string>
-    <string name="custom_color_hint">主题色，例如 #6750A4</string>
-    <string name="invalid_color">请输入有效颜色，如 #6750A4</string>
+    <string name="choose_custom_color">选择自定义主题色</string>
+    <string name="color_picker_title">选择主题颜色</string>
+    <string name="color_hue">色相</string>
+    <string name="color_saturation">饱和度</string>
+    <string name="color_brightness">亮度</string>
     <string name="apply">应用</string>
     <string name="welcome_title">欢迎使用存储伪装</string>
     <string name="welcome_intro">本模块通过 LSPosed 修改设置或厂商应用详情页读取到的存储统计，仅改变界面显示，不会修改、创建或删除真实文件。</string>
@@ -53,6 +56,9 @@
     <string name="readiness_scope_missing">LSPosed 作用域未勾选：%1$s。</string>
     <string name="readiness_scope_ok">✓ 已勾选作用域：%1$s</string>
     <string name="readiness_service_ok">✓ 已连接 %1$s · API %2$d</string>
+    <string name="readiness_usage_access_ok">✓ 已授予使用情况访问权限，可读取应用真实大小作为默认值</string>
+    <string name="readiness_usage_access_missing">未授予使用情况访问权限：新建配置时无法读取应用真实大小，将改用安全默认值；不影响已保存配置和模块 Hook。</string>
+    <string name="grant_usage_access">授予使用情况访问权限</string>
     <string name="readiness_package_missing">设备上未安装目标宿主：%1$s</string>
     <string name="readiness_no_target">没有检测到可支持的设置宿主。</string>
     <string name="recheck">重新检测</string>

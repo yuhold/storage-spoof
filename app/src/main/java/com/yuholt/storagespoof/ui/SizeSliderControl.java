@@ -18,6 +18,8 @@ final class SizeSliderControl {
     private final int gigabyteButtonId;
 
     private long unitBytes;
+    private boolean applyingValue;
+    private boolean userChanged;
 
     SizeSliderControl(
             View root,
@@ -40,10 +42,18 @@ final class SizeSliderControl {
         unitGroup.check(useGigabytes ? gigabyteButtonId : megabyteButtonId);
         configureSlider(initialBytes);
 
-        slider.addOnChangeListener((ignored, value, fromUser) -> updateValueText());
+        slider.addOnChangeListener((ignored, value, fromUser) -> {
+            if (fromUser) {
+                userChanged = true;
+            }
+            updateValueText();
+        });
         unitGroup.addOnButtonCheckedListener((group, checkedId, isChecked) -> {
             if (!isChecked) {
                 return;
+            }
+            if (!applyingValue) {
+                userChanged = true;
             }
             long currentBytes = getBytes();
             unitBytes = checkedId == gigabyteButtonId ? GIBIBYTE : MEBIBYTE;
@@ -54,6 +64,21 @@ final class SizeSliderControl {
     long getBytes() {
         double bytes = slider.getValue() * (double) unitBytes;
         return Math.min(maximumBytes, Math.round(bytes));
+    }
+
+    void setBytesIfUnchanged(long bytes) {
+        if (userChanged) {
+            return;
+        }
+        applyingValue = true;
+        try {
+            boolean useGigabytes = bytes >= GIBIBYTE && bytes % GIBIBYTE == 0L;
+            unitBytes = useGigabytes ? GIBIBYTE : MEBIBYTE;
+            unitGroup.check(useGigabytes ? gigabyteButtonId : megabyteButtonId);
+            configureSlider(bytes);
+        } finally {
+            applyingValue = false;
+        }
     }
 
     void setEnabled(boolean enabled) {

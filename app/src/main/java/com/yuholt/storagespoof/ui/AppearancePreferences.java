@@ -2,7 +2,6 @@ package com.yuholt.storagespoof.ui;
 
 import android.content.Context;
 import android.content.SharedPreferences;
-import android.graphics.Color;
 
 import androidx.annotation.ColorInt;
 
@@ -47,21 +46,6 @@ public final class AppearancePreferences {
 
     public void setSeedColor(@ColorInt int color) {
         preferences.edit().putInt(KEY_SEED_COLOR, color | 0xFF000000).apply();
-    }
-
-    @ColorInt
-    public static int parseColor(String input) {
-        String normalized = input == null ? "" : input.trim();
-        if (!normalized.startsWith("#")) {
-            normalized = "#" + normalized;
-        }
-        if (normalized.length() == 7) {
-            return Color.parseColor(normalized) | 0xFF000000;
-        }
-        if (normalized.length() == 9) {
-            return Color.parseColor(normalized);
-        }
-        throw new IllegalArgumentException("Color must use RRGGBB or AARRGGBB");
     }
 
     public static String formatColor(@ColorInt int color) {
