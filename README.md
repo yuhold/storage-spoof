@@ -100,6 +100,14 @@ long cacheBytes;
 
 Hook 使用 `ExceptionMode.PROTECTIVE`；字段布局不兼容时只写入框架日志，不让设置应用崩溃。
 
+## 贡献者与致谢
+
+- [@yuhold](https://github.com/yuhold) — 作者、维护者与主要开发；Git 提交邮箱：`yuhold.0757@qq.com`。
+- [Claude](https://www.anthropic.com/claude)（Anthropic）— 开发、代码审查与文档辅助。
+- [GPT](https://openai.com/)（OpenAI）— 开发辅助。
+
+> GitHub 的 Contributors 列表由实际提交记录自动生成；Claude 与 GPT 在此作为开发辅助工具致谢，不代表其为 GitHub 用户或项目著作权人。
+
 ## 许可
 
 本项目采用 [StorageSpoof Source-Available Non-Commercial License 1.0](LICENSE)：
