@@ -2,6 +2,15 @@ plugins {
     id("com.android.application")
 }
 
+val releaseStoreFile = providers.environmentVariable("ANDROID_SIGNING_STORE_FILE")
+val releaseStorePassword = providers.environmentVariable("ANDROID_SIGNING_STORE_PASSWORD")
+val releaseKeyAlias = providers.environmentVariable("ANDROID_SIGNING_KEY_ALIAS")
+val releaseKeyPassword = providers.environmentVariable("ANDROID_SIGNING_KEY_PASSWORD")
+val hasReleaseSigning = releaseStoreFile.isPresent
+        && releaseStorePassword.isPresent
+        && releaseKeyAlias.isPresent
+        && releaseKeyPassword.isPresent
+
 android {
     namespace = "com.yuholt.storagespoof"
     compileSdk = 37
@@ -10,10 +19,33 @@ android {
         applicationId = "com.yuholt.storagespoof"
         minSdk = 31
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = 2
+        versionName = "1.1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    signingConfigs {
+        if (hasReleaseSigning) {
+            create("release") {
+                storeFile = file(releaseStoreFile.get())
+                storePassword = releaseStorePassword.get()
+                keyAlias = releaseKeyAlias.get()
+                keyPassword = releaseKeyPassword.get()
+                enableV1Signing = true
+                enableV2Signing = true
+                enableV3Signing = true
+                enableV4Signing = true
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            if (hasReleaseSigning) {
+                signingConfig = signingConfigs.getByName("release")
+            }
+        }
     }
 
     buildFeatures {

@@ -1,5 +1,7 @@
 # StorageSpoof
 
+> **免费提供，禁止倒卖、付费下载、商业打包和收费安装。** 发现未经授权的商业销售，请通过 `yuholt.0757@qq.com` 联系作者。
+
 面向 Android 16 的现代 Xposed API 102 模块，用于修改系统设置中逐应用显示的存储占用。模块只改变设置应用读取到的 `StorageStats` 返回值，不会修改真实文件或磁盘空间。
 
 ## 功能
@@ -88,6 +90,26 @@ long cacheBytes;
 - `cacheBytes` / `mCacheBytes`
 
 Hook 使用 `ExceptionMode.PROTECTIVE`；字段布局不兼容时只写入框架日志，不让设置应用崩溃。
+
+## 许可
+
+本项目采用 [StorageSpoof Source-Available Non-Commercial License 1.0](LICENSE)：
+
+- 允许个人学习、审计、修改和自用。
+- 原版可在保留作者、许可和官方仓库链接的前提下免费分享。
+- 禁止倒卖、付费下载、商业打包、收费安装、订阅解锁及其他直接或间接商业分发。
+- 未经作者书面许可，不得公开分发修改版。
+
+该许可为了明确禁止商业倒卖，**不是 OSI 认可的开源许可证**。公开源码不代表放弃著作权或允许商业使用。
+
+## 官方仓库与下载
+
+- 官方仓库：https://github.com/yuhold/storage-spoof
+- 官方 APK：https://github.com/yuhold/storage-spoof/releases/latest
+- 推荐下载 `universal`；`arm64-v8a` 是为常见 64 位 ARM 设备提供的同签名兼容副本。当前项目不含原生 `.so`，因此二者内容及体积相同。
+- 每个版本同时提供 SHA-256 校验文件；其他收费来源均未获得作者授权。
+- 官方 APK 签名证书 SHA-256：`5F:73:C4:3C:1A:01:A1:43:D7:95:39:8C:6A:61:B4:A2:95:B1:D6:86:B1:E6:6B:AB:E1:06:76:D7:4D:B4:62:05`。
+- 从旧的 Debug/非官方签名构建切换到官方 Release 时，Android 可能要求先卸载旧版（这会清除模块配置）；安装 1.1.0 官方版后，后续官方版本可正常覆盖升级。
 
 ## 已知限制
 

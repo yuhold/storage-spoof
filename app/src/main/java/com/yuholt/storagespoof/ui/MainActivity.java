@@ -53,6 +53,7 @@ public final class MainActivity extends AppCompatActivity
         implements StorageSpoofApplication.ServiceStateListener {
     private static final int MENU_APPEARANCE = 1;
     private static final int MENU_ABOUT = 2;
+    private static final int MENU_READINESS = 3;
     private static final long DEFAULT_APP_BYTES = 128L << 20;
     private static final long DEFAULT_DATA_BYTES = 64L << 20;
     private static final long DEFAULT_CACHE_BYTES = 16L << 20;
@@ -123,6 +124,8 @@ public final class MainActivity extends AppCompatActivity
                 R.string.appearance);
         appearance.setShowAsAction(MenuItem.SHOW_AS_ACTION_IF_ROOM);
         appearance.setIcon(android.R.drawable.ic_menu_manage);
+        menu.add(Menu.NONE, MENU_READINESS, Menu.NONE, R.string.menu_readiness)
+                .setShowAsAction(MenuItem.SHOW_AS_ACTION_NEVER);
         menu.add(Menu.NONE, MENU_ABOUT, Menu.NONE, R.string.menu_about)
                 .setShowAsAction(MenuItem.SHOW_AS_ACTION_NEVER);
         return true;
@@ -132,6 +135,11 @@ public final class MainActivity extends AppCompatActivity
     public boolean onOptionsItemSelected(@NonNull MenuItem item) {
         if (item.getItemId() == MENU_APPEARANCE) {
             showAppearanceDialog();
+            return true;
+        }
+        if (item.getItemId() == MENU_READINESS) {
+            startActivity(new android.content.Intent(this, LauncherActivity.class)
+                    .putExtra(LauncherActivity.EXTRA_FORCE_SHOW, true));
             return true;
         }
         if (item.getItemId() == MENU_ABOUT) {

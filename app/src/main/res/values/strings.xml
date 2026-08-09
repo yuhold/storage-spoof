@@ -72,5 +72,9 @@
     <string name="about_description">逐应用配置应用、数据和缓存显示大小。支持 Android 16、现代 libxposed API 102、AOSP 设置及小米澎湃 OS 3 安全中心；未配置应用保持真实统计。配置页面提供自定义与 Material 3 两套界面、莫奈动态取色和自定义主题色。</string>
     <string name="about_author_title">作者与联系</string>
     <string name="about_author_body">作者：yuholt\n联系邮箱：yuholt.0757@qq.com\nYuholt❤️duck</string>
+    <string name="about_project_title">项目与许可</string>
+    <string name="about_repository">GitHub：https://github.com/yuhold/storage-spoof</string>
+    <string name="about_license">本项目采用源码可见的非商业许可。允许个人学习、研究和自用；禁止倒卖、付费下载、商业打包、收费安装，以及删除作者或仓库信息后重新分发。完整条款请查看仓库 LICENSE。</string>
+    <string name="menu_readiness">重新检查运行环境</string>
     <string name="menu_about">介绍与免责声明</string>
 </resources>

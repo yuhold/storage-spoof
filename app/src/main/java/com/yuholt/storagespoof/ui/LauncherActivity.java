@@ -30,8 +30,11 @@ import io.github.libxposed.service.XposedService;
 
 public final class LauncherActivity extends AppCompatActivity
         implements StorageSpoofApplication.ServiceStateListener {
+    public static final String EXTRA_FORCE_SHOW = "force_show";
+
     private static final String PREFERENCES_NAME = "onboarding";
     private static final String KEY_DISCLAIMER_ACCEPTED = "disclaimer_accepted";
+    private static final String KEY_ONBOARDING_COMPLETED = "onboarding_completed";
     private static final String SETTINGS_PACKAGE = "com.android.settings";
     private static final String SECURITY_CENTER_PACKAGE = "com.miui.securitycenter";
 
@@ -48,6 +51,13 @@ public final class LauncherActivity extends AppCompatActivity
         appearancePreferences = new AppearancePreferences(this);
         applyColors();
         super.onCreate(savedInstanceState);
+        SharedPreferences onboarding = getSharedPreferences(PREFERENCES_NAME, MODE_PRIVATE);
+        migrateOnboardingState(onboarding);
+        if (!getIntent().getBooleanExtra(EXTRA_FORCE_SHOW, false)
+                && onboarding.getBoolean(KEY_ONBOARDING_COMPLETED, false)) {
+            openConfigurationAndFinish();
+            return;
+        }
         setContentView(R.layout.activity_launcher);
 
         disclaimerAccepted = findViewById(R.id.disclaimer_accepted);
@@ -55,7 +65,6 @@ public final class LauncherActivity extends AppCompatActivity
         readinessDetails = findViewById(R.id.readiness_details);
         usageAccessButton = findViewById(R.id.usage_access_button);
         continueButton = findViewById(R.id.continue_button);
-        SharedPreferences onboarding = getSharedPreferences(PREFERENCES_NAME, MODE_PRIVATE);
         disclaimerAccepted.setChecked(onboarding.getBoolean(KEY_DISCLAIMER_ACCEPTED, false));
         disclaimerAccepted.setOnCheckedChangeListener((button, checked) ->
                 onboarding.edit().putBoolean(KEY_DISCLAIMER_ACCEPTED, checked).apply());
@@ -201,7 +210,7 @@ public final class LauncherActivity extends AppCompatActivity
             return;
         }
         if (currentIssues.isEmpty()) {
-            openConfiguration();
+            completeOnboardingAndOpen();
             return;
         }
         new AlertDialog.Builder(this)
@@ -210,8 +219,31 @@ public final class LauncherActivity extends AppCompatActivity
                         R.string.continue_warning_message,
                         String.join("\n", currentIssues)))
                 .setNegativeButton(R.string.cancel, null)
-                .setPositiveButton(R.string.continue_anyway, (dialog, which) -> openConfiguration())
+                .setPositiveButton(
+                        R.string.continue_anyway,
+                        (dialog, which) -> completeOnboardingAndOpen())
                 .show();
+    }
+
+    private static void migrateOnboardingState(SharedPreferences onboarding) {
+        if (!onboarding.contains(KEY_ONBOARDING_COMPLETED)
+                && onboarding.getBoolean(KEY_DISCLAIMER_ACCEPTED, false)) {
+            onboarding.edit().putBoolean(KEY_ONBOARDING_COMPLETED, true).apply();
+        }
+    }
+
+    private void completeOnboardingAndOpen() {
+        getSharedPreferences(PREFERENCES_NAME, MODE_PRIVATE)
+                .edit()
+                .putBoolean(KEY_DISCLAIMER_ACCEPTED, true)
+                .putBoolean(KEY_ONBOARDING_COMPLETED, true)
+                .apply();
+        openConfigurationAndFinish();
+    }
+
+    private void openConfigurationAndFinish() {
+        openConfiguration();
+        finish();
     }
 
     private void openConfiguration() {
