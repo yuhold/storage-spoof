@@ -1,0 +1,24 @@
+*.iml
+.gradle/
+/local.properties
+/.reference-*
+/.discussion-*
+/.idea/
+.DS_Store
+/build/
+**/build/
+/captures/
+.externalNativeBuild/
+.cxx/
+
+# Local reverse-engineering and device diagnostics
+/.decompiled-*/
+/.device-apks/
+/.tmp-*/
+/*.sql
+
+# Signing material and generated packages
+*.jks
+*.keystore
+*.apk
+*.aab
